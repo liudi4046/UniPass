@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+**/node_modules/
+
+# build artifacts
+dist/
+.next/
+.turbo/
+out/
+build/
+.cache/
+
+# hardhat outputs
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+
+# env & misc
+.env
+.env.*
+.DS_Store
+*.log
+coverage/
+
+
