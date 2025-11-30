@@ -1,0 +1,20 @@
+{
+  "name": "@unipass/sdk",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w"
+  },
+  "dependencies": {
+    "@semaphore-protocol/identity": "^4.6.0",
+    "@semaphore-protocol/group": "^4.6.0",
+    "@semaphore-protocol/proof": "^4.6.0",
+    "ethers": "^6.13.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
+

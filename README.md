@@ -1,54 +1,95 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/semaphore-protocol/website/main/static/img/logo.svg" alt="UniPass" width="120" />
-</p>
+# UniPass (Based on Electronic Passport)
 
-# UniPass Core
+**UniPass** is a decentralized, anonymous identity layer that proves "Personhood" using ZK-proofs of real-world passports.
 
-UniPass 是一个围绕 “一次护照验证，永久匿名身份” 的去中心化身份层。为了便于在本仓库中与已有的 `semaphore` 与 `zkpassport-docs` 项目解耦，我们在 `unipass-core/` 中搭建了独立的实现目录，用来承载智能合约、SDK 以及白皮书级文档。
+## 📂 Project Structure
 
-## 目录结构
+This monorepo contains:
 
-| 路径 | 说明 |
-| --- | --- |
-| `docs/` | 白皮书草案、路演提纲以及面向非技术读者的材料。 |
-| `contracts/` | Hardhat 项目，包含 UniPass Registry 合约、Mock 合约与测试。 |
-| `sdk/` | TypeScript SDK 草案，封装客户端生成身份承诺与调用流程。 |
-| `web/` | Next.js 15 前端 Demo，提供一次性注册与 Proof 提交流程。 |
+- **`apps/web`**: A Next.js 15 frontend for users to scan passports and manage their identity.
+- **`packages/contracts`**: Solidity smart contracts (Foundry) for the Registry and Semaphore integration.
+- **`packages/sdk`**: A TypeScript SDK for DApps to integrate UniPass verification.
 
-## 快速开始
+## 🚀 Getting Started
 
-1. **安装依赖**
+### Prerequisites
 
-   ```bash
-   cd unipass-core/contracts
-   npm install
-   ```
+- **Node.js** (v20+)
+- **pnpm** (v9+)
+- **Foundry** (Forge, Anvil, Cast)
 
-2. **运行测试**
+### Installation
 
-   ```bash
-   npm test
-   ```
+1. **Install Dependencies**
 
-3. **阅读白皮书**
+```bash
+cd unipass-core
+pnpm install
+```
 
-   ```bash
-   open docs/whitepaper.md
-   ```
+2. **Compile Contracts**
 
-## 技术栈
+```bash
+cd packages/contracts
+forge build
+```
 
-- 零知识证明与匿名身份：`@semaphore-protocol/contracts`
-- 智能合约框架：Hardhat + TypeScript
-- SDK：Vite + TypeScript（未来可扩展至 RN / 浏览器环境）
-- 前端：Next.js 15 + React 19 + Tailwind CSS
+3. **Run Frontend**
 
-## 后续工作
+```bash
+cd apps/web
+pnpm dev
+```
 
-- [ ] 对接真实的 ZKPassport 验证器（目前使用接口 & Mock）
-- [ ] 在 SDK 中集成手机 NFC 护照读取流程
-- [ ] 提供示例 DApp（如空投领取或 Snapshot 投票插件）
+## 🏗 Architecture
 
-欢迎基于该目录继续扩展，所有实现均与文档目录相互独立，便于协同开发。
+```mermaid
+graph TD
+    User[User with Passport]
+    App[UniPass App]
+    ZKPassport[ZKPassport Verifier]
+    Registry[UniPass Registry Contract]
+    Semaphore[Semaphore Contract]
+    DApp[Third Party DApp]
 
+    User -->|NFC Scan| App
+    App -->|Gen ZK Proof| Registry
+    Registry -->|Verify Sig| ZKPassport
+    Registry -->|Add Member| Semaphore
+    
+    subgraph "Anonymous Usage"
+        App -->|Gen Signal Proof| DApp
+        DApp -->|Verify & Consume| Registry
+    end
+```
+
+## 🛠 Technical Details
+
+- **Trust Source**: Electronic Passport (ICAO Standard) via ZKPassport.
+- **Privacy Layer**: Semaphore V4 (Merkle Tree based Membership Proofs).
+- **Sybil Resistance**: Each passport allows only **one** registration (tracked via Passport Nullifier).
+- **Scope Isolation**: DApps use unique scopes/nullifiers, so they cannot track users across different applications.
+
+## 📜 Key Contracts
+
+- `UniPassRegistry.sol`: The main entry point.
+  - `register(...)`: Verifies passport proof -> Adds to Semaphore Group.
+  - `verifyAndConsume(...)`: Verifies anonymous membership -> Prevents double-spending in scope.
+
+## 💻 SDK Usage
+
+```typescript
+import { UniPassSDK } from "@unipass/sdk";
+
+const sdk = new UniPassSDK({ registryAddress: "0x...", signer });
+
+// 1. Create Identity locally
+const identity = await sdk.createIdentity();
+
+// 2. Register (requires passport proof)
+await sdk.register(identity, passportProof);
+
+// 3. Verify in DApp
+await sdk.verifyAndConsume(identity, group, "DApp_Scope_ID", "User_Address");
+```
 
