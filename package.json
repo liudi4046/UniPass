@@ -8,9 +8,16 @@
     "format": "prettier --write \"**/*.{ts,tsx,md}\""
   },
   "devDependencies": {
-    "turbo": "^2.0.0",
-    "prettier": "^3.0.0"
+    "prettier": "^3.0.0",
+    "turbo": "^2.0.0"
   },
-  "packageManager": "pnpm@9.0.0"
+  "packageManager": "pnpm@9.0.0",
+  "dependencies": {
+    "@semaphore-protocol/group": "^4.14.0",
+    "@semaphore-protocol/identity": "^4.14.0",
+    "@semaphore-protocol/proof": "^4.14.0",
+    "@zkpassport/sdk": "^0.12.4",
+    "ethers": "^6.15.0",
+    "react-qr-code": "^2.0.18"
+  }
 }
-
