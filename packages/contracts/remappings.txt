@@ -1,0 +1,4 @@
+@semaphore-protocol/=lib/semaphore/packages/
+@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
+forge-std/=lib/forge-std/src/
+

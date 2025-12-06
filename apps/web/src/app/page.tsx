@@ -1,142 +1,224 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Scan, ShieldCheck, Globe, Key, CheckCircle, ArrowRight, Loader2 } from "lucide-react";
+import { useState, useCallback } from "react";
+import { Scan, ShieldCheck, Globe, ArrowRight, Loader2, Wallet, ExternalLink } from "lucide-react";
 import { Identity } from "@semaphore-protocol/identity";
+import { Group } from "@semaphore-protocol/group";
+import { generateProof } from "@semaphore-protocol/proof";
 import { ZKPassport, ProofResult } from "@zkpassport/sdk";
 import QRCode from "react-qr-code";
-
-// Mock contract address
-const UNIPASS_CONTRACT_ADDRESS = "0x1234...5678";
+import { useAccount, useWriteContract, useReadContract, useWaitForTransactionReceipt } from "wagmi";
+import { parseAbiItem, encodeAbiParameters, keccak256, toHex, stringToHex } from "viem";
+import { ConnectButton } from "@/components/WalletConnect";
+import { CONTRACTS, UNIPASS_REGISTRY_ABI, SEMAPHORE_ABI } from "@/config/contracts";
 
 export default function Home() {
-  const [step, setStep] = useState<"intro" | "scan" | "register" | "dapp">("intro");
+  const { address, isConnected } = useAccount();
+  const [step, setStep] = useState<"intro" | "connect" | "scan" | "register" | "dapp">("intro");
   const [scanning, setScanning] = useState(false);
-  const [registering, setRegistering] = useState(false);
   const [verifying, setVerifying] = useState(false);
-  
+
   const [passportData, setPassportData] = useState<any>(null);
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [proofResult, setProofResult] = useState<ProofResult | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
+  const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
 
-  const addLog = (msg: string) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+  // Contract interactions
+  const { writeContract, isPending: isWritePending, data: writeData } = useWriteContract();
+  const { isLoading: isTxLoading, isSuccess: isTxSuccess } = useWaitForTransactionReceipt({
+    hash: writeData,
+  });
+
+  // Read group ID
+  const { data: groupId } = useReadContract({
+    address: CONTRACTS.UNIPASS_REGISTRY as `0x${string}`,
+    abi: UNIPASS_REGISTRY_ABI,
+    functionName: "uniPassGroupId",
+  });
+
+  const addLog = useCallback((msg: string) => {
+    setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+  }, []);
 
   // Step 1: Real ZKPassport Scan Request
   const handleScanPassport = async () => {
+    if (!address) {
+      addLog("Error: Please connect wallet first");
+      return;
+    }
+
     setScanning(true);
     addLog("Initializing ZKPassport SDK...");
 
     try {
       const zkPassport = new ZKPassport("unipass.id");
 
-      // Create request
       const queryBuilder = await zkPassport.request({
         name: "UniPass",
         logo: "https://unipass.id/logo.png",
         purpose: "Create your anonymous global identity",
         scope: "unipass-registry",
-        mode: "compressed-evm", // Essential for on-chain verification
+        mode: "compressed-evm",
       });
 
-      // Configure requirements
-      const {
-        url,
-        onResult,
-        onProofGenerated
-      } = queryBuilder
+      const { url, onResult, onProofGenerated } = queryBuilder
         .disclose("nationality")
         .disclose("document_type")
+        .bind("user_address", address)
+        .bind("chain", "ethereum")
         .done();
 
       setQrCodeUrl(url);
       addLog("Request generated. Please scan the QR code with ZKPassport App.");
 
-      // Listen for results
       onResult(({ uniqueIdentifier, verified, result }) => {
-         if (verified) {
-             addLog(`Verification Successful! ID: ${uniqueIdentifier?.slice(0, 10)}...`);
-             
-             // Create a deterministic Semaphore identity from the unique identifier
-             // In production, we might use a signature of this ID + user secret
-             const newIdentity = new Identity(uniqueIdentifier);
-             setIdentity(newIdentity);
-             
-             setPassportData({
-                 country: result.nationality?.disclose?.result,
-                 type: result.document_type?.disclose?.result,
-                 commitment: newIdentity.commitment.toString()
-             });
-             
-             setQrCodeUrl(null);
-             setScanning(false);
-             setStep("register");
-         } else {
-             addLog("Verification Failed.");
-             setScanning(false);
-         }
+        if (verified) {
+          addLog(`Verification Successful! ID: ${uniqueIdentifier?.slice(0, 10)}...`);
+
+          // Create deterministic Semaphore identity from unique identifier
+          const newIdentity = new Identity(uniqueIdentifier);
+          setIdentity(newIdentity);
+
+          setPassportData({
+            country: result.nationality?.disclose?.result,
+            type: result.document_type?.disclose?.result,
+            commitment: newIdentity.commitment.toString(),
+          });
+
+          setQrCodeUrl(null);
+          setScanning(false);
+          setStep("register");
+        } else {
+          addLog("Verification Failed.");
+          setScanning(false);
+        }
       });
 
       onProofGenerated((proof) => {
-          addLog("Proof generated by mobile app...");
-          setProofResult(proof);
+        addLog("Proof generated by mobile app...");
+        setProofResult(proof);
       });
-
     } catch (error: any) {
-        addLog(`Error: ${error.message}`);
-        setScanning(false);
+      addLog(`Error: ${error.message}`);
+      setScanning(false);
     }
   };
 
   // Step 2: Register on Chain
   const handleRegister = async () => {
-    if (!passportData || !identity || !proofResult) return;
-    
-    setRegistering(true);
-    addLog(`Submitting Commitment to Chain: ${UNIPASS_CONTRACT_ADDRESS}`);
-    
-    // Real implementation would use UniPassSDK here
-    // await sdk.register(identity, proofResult);
-    
-    // Simulation for demo
-    await new Promise(r => setTimeout(r, 2000));
-    
-    addLog("Transaction Confirmed.");
-    addLog("User added to UniPass Global Anonymity Set.");
-    
-    setRegistering(false);
-    setStep("dapp");
+    if (!passportData || !identity || !proofResult || !address) return;
+
+    addLog(`Preparing registration transaction...`);
+    addLog(`Commitment: ${identity.commitment.toString().slice(0, 20)}...`);
+
+    try {
+      // Build the proof parameters for the contract
+      const zkPassport = new ZKPassport("unipass.id");
+      const verifierParams = zkPassport.getSolidityVerifierParameters({
+        proof: proofResult,
+        scope: "unipass-registry",
+        devMode: false,
+      });
+
+      addLog(`Submitting to UniPassRegistry: ${CONTRACTS.UNIPASS_REGISTRY.slice(0, 10)}...`);
+
+      writeContract({
+        address: CONTRACTS.UNIPASS_REGISTRY as `0x${string}`,
+        abi: UNIPASS_REGISTRY_ABI,
+        functionName: "register",
+        args: [BigInt(identity.commitment.toString()), verifierParams, false],
+      });
+
+      addLog("Transaction submitted. Waiting for confirmation...");
+    } catch (error: any) {
+      addLog(`Error: ${error.message}`);
+    }
   };
 
-  // Step 3: Verify in DApp
+  // Watch for transaction success
+  if (isTxSuccess && step === "register") {
+    addLog("Transaction Confirmed!");
+    addLog("User added to UniPass Global Anonymity Set.");
+    setStep("dapp");
+  }
+
+  // Step 3: Verify in DApp (generate and submit Semaphore proof)
   const handleDAppVerify = async () => {
-    if (!identity) return;
-    
+    if (!identity || !groupId) {
+      addLog("Error: Missing identity or group data");
+      return;
+    }
+
     setVerifying(true);
     addLog("DApp 'Uniswap' requesting verification...");
-    addLog("Generating Zero-Knowledge Proof (Membership + Nullifier)...");
-    
-    // In a real app, we would use:
-    // const proof = await generateProof(identity, group, externalNullifier, signal);
-    
-    await new Promise(r => setTimeout(r, 3000));
-    
-    addLog("Proof Generated.");
-    addLog("Verifying Proof on-chain...");
-    
-    await new Promise(r => setTimeout(r, 1000));
-    
-    addLog("SUCCESS: User is a unique human. Airdrop Claimed!");
-    setVerifying(false);
+    addLog("Generating Semaphore Zero-Knowledge Proof...");
+
+    try {
+      // Create group and generate proof
+      // In production, you'd fetch the group members from the contract events
+      const group = new Group();
+      group.addMember(identity.commitment);
+
+      // Generate scope hash for Uniswap airdrop
+      const scope = BigInt(keccak256(stringToHex("uniswap-airdrop-2024")));
+      const message = BigInt(address as string);
+
+      addLog("Generating membership proof...");
+
+      const proof = await generateProof(identity, group, message, scope);
+
+      addLog(`Proof Generated! Nullifier: ${proof.nullifier.toString().slice(0, 10)}...`);
+      addLog("Submitting verification to contract...");
+
+      writeContract({
+        address: CONTRACTS.UNIPASS_REGISTRY as `0x${string}`,
+        abi: UNIPASS_REGISTRY_ABI,
+        functionName: "verifyAndConsume",
+        args: [
+          {
+            merkleTreeDepth: BigInt(proof.merkleTreeDepth),
+            merkleTreeRoot: BigInt(proof.merkleTreeRoot),
+            nullifier: BigInt(proof.nullifier),
+            message: BigInt(proof.message),
+            scope: BigInt(proof.scope),
+            points: proof.points.map((p) => BigInt(p)) as readonly [
+              bigint,
+              bigint,
+              bigint,
+              bigint,
+              bigint,
+              bigint,
+              bigint,
+              bigint
+            ],
+          },
+        ],
+      });
+
+      addLog("Proof submitted. Waiting for on-chain verification...");
+    } catch (error: any) {
+      addLog(`Error: ${error.message}`);
+      setVerifying(false);
+    }
   };
+
+  // Handle DApp verification success
+  if (isTxSuccess && step === "dapp" && verifying) {
+    addLog("SUCCESS: Proof verified on-chain!");
+    addLog("Airdrop claimed! You are a verified unique human.");
+    setVerifying(false);
+  }
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-black text-white p-4 font-sans selection:bg-green-900">
       <div className="max-w-3xl w-full space-y-8">
-        
         {/* Header */}
         <header className="text-center space-y-4">
+          <div className="flex justify-end mb-4">
+            <ConnectButton />
+          </div>
           <div className="inline-flex items-center justify-center p-3 bg-green-900/20 rounded-full mb-4">
             <Globe className="w-8 h-8 text-green-500" />
           </div>
@@ -150,27 +232,30 @@ export default function Home() {
 
         {/* Main Card */}
         <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-8 backdrop-blur-sm shadow-2xl">
-          
           {/* Step Indicator */}
           <div className="flex justify-between mb-12 border-b border-zinc-800 pb-4">
-            {["intro", "scan", "register", "dapp"].map((s, i) => (
-              <div key={s} className={`flex items-center space-x-2 ${step === s ? "text-green-500" : "text-zinc-600"}`}>
+            {["intro", "connect", "scan", "register", "dapp"].map((s) => (
+              <div
+                key={s}
+                className={`flex items-center space-x-2 ${step === s ? "text-green-500" : "text-zinc-600"}`}
+              >
                 <div className={`w-3 h-3 rounded-full ${step === s ? "bg-green-500" : "bg-zinc-800"}`} />
-                <span className="capitalize hidden sm:block">{s}</span>
+                <span className="capitalize hidden sm:block text-sm">
+                  {s === "intro" ? "Start" : s === "dapp" ? "Use" : s}
+                </span>
               </div>
             ))}
           </div>
 
           <div className="min-h-[300px] flex flex-col items-center justify-center text-center">
-            
             {step === "intro" && (
               <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
                 <div className="space-y-2">
                   <h2 className="text-2xl font-semibold">One Passport, Infinite Identities.</h2>
                   <p className="text-zinc-400">Prove you are human without revealing who you are.</p>
                 </div>
-                <button 
-                  onClick={() => setStep("scan")}
+                <button
+                  onClick={() => setStep("connect")}
                   className="bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-gray-200 transition flex items-center mx-auto space-x-2"
                 >
                   <span>Start Verification</span>
@@ -179,39 +264,74 @@ export default function Home() {
               </div>
             )}
 
+            {step === "connect" && (
+              <div className="space-y-6 animate-in fade-in w-full flex flex-col items-center">
+                <Wallet className="w-16 h-16 text-green-500" />
+                <div className="space-y-2">
+                  <h2 className="text-2xl font-semibold">Connect Your Wallet</h2>
+                  <p className="text-zinc-400">
+                    We need your wallet to bind the proof and submit transactions.
+                  </p>
+                </div>
+
+                {isConnected ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center space-x-2 text-green-400">
+                      <div className="w-2 h-2 bg-green-500 rounded-full" />
+                      <span>
+                        Connected: {address?.slice(0, 6)}...{address?.slice(-4)}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setStep("scan")}
+                      className="bg-green-600 text-white px-8 py-3 rounded-full font-bold hover:bg-green-700 transition"
+                    >
+                      Continue to Passport Scan
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-zinc-400">
+                    <p className="mb-4">Click the &quot;Connect&quot; button in the top right corner.</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {step === "scan" && (
               <div className="space-y-6 animate-in fade-in w-full flex flex-col items-center">
                 {qrCodeUrl ? (
-                     <div className="bg-white p-4 rounded-xl mb-4">
-                         <QRCode value={qrCodeUrl} size={200} />
-                     </div>
+                  <div className="bg-white p-4 rounded-xl mb-4">
+                    <QRCode value={qrCodeUrl} size={200} />
+                  </div>
                 ) : (
-                    <div className="relative">
-                        <Scan className={`w-20 h-20 text-green-500 ${scanning ? "animate-pulse" : ""}`} />
-                        {scanning && <div className="absolute inset-0 bg-green-500/20 blur-xl rounded-full animate-pulse" />}
-                    </div>
+                  <div className="relative">
+                    <Scan className={`w-20 h-20 text-green-500 ${scanning ? "animate-pulse" : ""}`} />
+                    {scanning && (
+                      <div className="absolute inset-0 bg-green-500/20 blur-xl rounded-full animate-pulse" />
+                    )}
+                  </div>
                 )}
-                
+
                 <div className="mt-4">
                   <h2 className="text-2xl font-semibold">Scan with ZKPassport App</h2>
                   <p className="text-zinc-400">Scan the QR code to generate a private proof.</p>
                 </div>
-                
+
                 {!qrCodeUrl && (
-                    <button 
+                  <button
                     onClick={handleScanPassport}
                     disabled={scanning}
                     className="mt-6 bg-green-600 text-white px-8 py-3 rounded-full font-bold hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
+                  >
                     {scanning ? (
-                        <span className="flex items-center space-x-2">
+                      <span className="flex items-center space-x-2">
                         <Loader2 className="w-4 h-4 animate-spin" />
                         <span>Initializing...</span>
-                        </span>
+                      </span>
                     ) : (
-                        "Generate QR Code"
+                      "Generate QR Code"
                     )}
-                    </button>
+                  </button>
                 )}
               </div>
             )}
@@ -232,41 +352,65 @@ export default function Home() {
                       <span>ZK Identity:</span>
                       <span className="text-white font-mono">{passportData.commitment.slice(0, 10)}...</span>
                     </div>
+                    <div className="flex justify-between">
+                      <span>Contract:</span>
+                      <span className="text-white font-mono">{CONTRACTS.UNIPASS_REGISTRY.slice(0, 10)}...</span>
+                    </div>
                   </div>
                 </div>
-                <button 
+                <button
                   onClick={handleRegister}
-                  disabled={registering}
+                  disabled={isWritePending || isTxLoading}
                   className="w-full bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-gray-200 transition disabled:opacity-50"
                 >
-                  {registering ? (
-                     <span className="flex items-center justify-center space-x-2">
-                     <Loader2 className="w-4 h-4 animate-spin" />
-                     <span>Minting ZK Identity...</span>
-                   </span>
-                  ) : "Register on Chain"}
+                  {isWritePending || isTxLoading ? (
+                    <span className="flex items-center justify-center space-x-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>{isTxLoading ? "Confirming..." : "Signing..."}</span>
+                    </span>
+                  ) : (
+                    "Register on Chain"
+                  )}
                 </button>
+                {writeData && (
+                  <a
+                    href={`https://sepolia.etherscan.io/tx/${writeData}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center space-x-1 text-sm text-zinc-400 hover:text-white"
+                  >
+                    <span>View on Etherscan</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
               </div>
             )}
 
             {step === "dapp" && (
               <div className="space-y-6 animate-in fade-in w-full max-w-md">
-                 <div className="p-6 rounded-xl border border-zinc-800 bg-gradient-to-br from-purple-900/20 to-blue-900/20 text-left space-y-4">
+                <div className="p-6 rounded-xl border border-zinc-800 bg-gradient-to-br from-purple-900/20 to-blue-900/20 text-left space-y-4">
                   <div className="flex justify-between items-center">
                     <h3 className="font-bold text-lg">Uniswap Airdrop</h3>
                     <span className="px-2 py-1 bg-purple-500/20 text-purple-400 text-xs rounded">Demo DApp</span>
                   </div>
                   <p className="text-zinc-400 text-sm">Claim your UNI tokens anonymously. Sybil-resistant.</p>
+                  <div className="pt-2 border-t border-zinc-800 text-xs text-zinc-500 space-y-1">
+                    <p>• Your identity stays private</p>
+                    <p>• One claim per passport, per scope</p>
+                    <p>• No linking between DApps</p>
+                  </div>
                 </div>
-                <button 
+                <button
                   onClick={handleDAppVerify}
-                  disabled={verifying}
+                  disabled={verifying || isWritePending || isTxLoading}
                   className="w-full bg-purple-600 text-white px-8 py-3 rounded-full font-bold hover:bg-purple-700 transition disabled:opacity-50"
                 >
-                  {verifying ? (
+                  {verifying || isWritePending || isTxLoading ? (
                     <span className="flex items-center justify-center space-x-2">
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Generating Proof...</span>
+                      <span>
+                        {isTxLoading ? "Verifying on-chain..." : verifying ? "Generating Proof..." : "Signing..."}
+                      </span>
                     </span>
                   ) : (
                     "Prove Personhood & Claim"
@@ -274,7 +418,6 @@ export default function Home() {
                 </button>
               </div>
             )}
-
           </div>
         </div>
 
@@ -282,10 +425,20 @@ export default function Home() {
         <div className="bg-black/50 border border-zinc-900 rounded-lg p-4 h-48 overflow-y-auto font-mono text-xs text-zinc-500 space-y-1">
           {logs.length === 0 && <span className="text-zinc-700">// System logs will appear here...</span>}
           {logs.map((log, i) => (
-            <div key={i} className="border-l-2 border-green-900 pl-2">{log}</div>
+            <div key={i} className="border-l-2 border-green-900 pl-2">
+              {log}
+            </div>
           ))}
         </div>
 
+        {/* Footer Info */}
+        <div className="text-center text-zinc-600 text-sm space-y-2">
+          <p>
+            Registry Contract:{" "}
+            <code className="text-zinc-500">{CONTRACTS.UNIPASS_REGISTRY.slice(0, 20)}...</code>
+          </p>
+          <p>Network: Sepolia Testnet</p>
+        </div>
       </div>
     </div>
   );

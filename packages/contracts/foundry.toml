@@ -1,11 +1,32 @@
 [profile.default]
 src = "src"
 out = "out"
-libs = ["lib"]
+libs = ["lib", "node_modules"]
 test = "test"
 script = "script"
 solc_version = "0.8.23"
+optimizer = true
+optimizer_runs = 200
+via_ir = false
+ffi = true
+
+# Remappings
+remappings = [
+    "@semaphore-protocol/=lib/semaphore/packages/",
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "forge-std/=lib/forge-std/src/",
+]
 
 [rpc_endpoints]
-# Add RPC endpoints here if needed
+sepolia = "${SEPOLIA_RPC_URL}"
+mainnet = "${MAINNET_RPC_URL}"
+localhost = "http://127.0.0.1:8545"
 
+[etherscan]
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+mainnet = { key = "${ETHERSCAN_API_KEY}" }
+
+[fmt]
+line_length = 120
+tab_width = 4
+bracket_spacing = true

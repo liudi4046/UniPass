@@ -90,19 +90,71 @@ graph TD
 pnpm install
 ```
 
-2.  **编译合约**
+2.  **安装合约依赖 & 编译**
 
 ```bash
 cd packages/contracts
+
+# 安装 Foundry 依赖
+make install
+
+# 或手动安装
+forge install foundry-rs/forge-std --no-commit
+forge install semaphore-protocol/semaphore --no-commit
+forge install OpenZeppelin/openzeppelin-contracts --no-commit
+
+# 编译合约
 forge build
 ```
 
-3.  **启动前端**
+3.  **配置环境变量**
+
+```bash
+# 合约配置
+cd packages/contracts
+cp env.example .env
+# 编辑 .env 填入你的 RPC URL 和私钥
+
+# 前端配置
+cd apps/web
+cp env.example .env.local
+# 编辑 .env.local 填入合约地址和 WalletConnect Project ID
+```
+
+4.  **运行测试**
+
+```bash
+cd packages/contracts
+make test
+# 或
+forge test -vvv
+```
+
+5.  **部署合约**
+
+```bash
+# 本地测试 (使用 Mock 合约)
+make anvil  # 在另一个终端启动 Anvil
+make deploy-local
+
+# 部署到 Sepolia
+make deploy-sepolia
+```
+
+6.  **启动前端**
 
 ```bash
 cd apps/web
 pnpm dev
 ```
+
+### 📁 配置文件说明
+
+| 文件 | 用途 |
+|------|------|
+| `packages/contracts/env.example` | 合约部署配置模板 |
+| `packages/contracts/remappings.txt` | Foundry 依赖路径映射 |
+| `apps/web/env.example` | 前端配置模板 |
 
 ---
 

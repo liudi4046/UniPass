@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { Providers } from "@/components/Providers";
 
 export const metadata: Metadata = {
   title: "UniPass - Global Anonymous Identity",
@@ -14,9 +15,8 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased min-h-screen bg-black text-white">
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
 }
-
