@@ -58,14 +58,6 @@ contract MockSemaphore is ISemaphore {
 }
 
 contract MockZKPassportHelper is IZKPassportHelper {
-    address public expectedSender;
-    uint256 public expectedChainId;
-
-    function setExpectedBoundData(address sender, uint256 chainId) external {
-        expectedSender = sender;
-        expectedChainId = chainId;
-    }
-
     function verifyScopes(bytes32[] calldata, string calldata, string calldata) external pure override returns (bool) {
         return true;
     }
@@ -83,8 +75,13 @@ contract MockZKPassportHelper is IZKPassportHelper {
         });
     }
 
-    function getBoundData(bytes calldata) external view override returns (BoundData memory) {
-        return BoundData({senderAddress: expectedSender, chainId: expectedChainId, customData: ""});
+    // Decode bound data from committedInputs (address, uint256 encoded)
+    function getBoundData(bytes calldata committedInputs) external pure override returns (BoundData memory) {
+        if (committedInputs.length >= 64) {
+            (address sender, uint256 chainId) = abi.decode(committedInputs, (address, uint256));
+            return BoundData({senderAddress: sender, chainId: chainId, customData: ""});
+        }
+        return BoundData({senderAddress: address(0), chainId: 0, customData: ""});
     }
 
     function isAgeAboveOrEqual(uint8, bytes calldata) external pure override returns (bool) {
@@ -107,10 +104,6 @@ contract MockZKPassportVerifier is IZKPassportVerifier {
 
     function setReturnedIdentifier(bytes32 _identifier) external {
         returnedIdentifier = _identifier;
-    }
-
-    function setExpectedBoundData(address sender, uint256 chainId) external {
-        helper.setExpectedBoundData(sender, chainId);
     }
 
     function verify(
@@ -164,27 +157,20 @@ contract UniPassRegistryTest is Test {
     // =========================================================================
 
     function test_register_success() public {
-        // Setup
-        verifier.setExpectedBoundData(alice, block.chainid);
         verifier.setReturnedIdentifier(keccak256("passport1"));
+        ProofVerificationParams memory params = _createMockProofParams(alice, block.chainid);
 
-        ProofVerificationParams memory params = _createMockProofParams();
-
-        // Execute
         vm.prank(alice);
         registry.register(ALICE_COMMITMENT, params, false);
 
-        // Verify
         assertTrue(semaphore.isMember(registry.uniPassGroupId(), ALICE_COMMITMENT));
         assertTrue(registry.passportIdentifiers(keccak256("passport1")));
     }
 
     function test_register_emitsEvent() public {
-        verifier.setExpectedBoundData(alice, block.chainid);
         bytes32 passportId = keccak256("passport1");
         verifier.setReturnedIdentifier(passportId);
-
-        ProofVerificationParams memory params = _createMockProofParams();
+        ProofVerificationParams memory params = _createMockProofParams(alice, block.chainid);
 
         vm.expectEmit(true, true, false, false);
         emit UniPassRegistry.UserRegistered(ALICE_COMMITMENT, passportId);
@@ -195,9 +181,7 @@ contract UniPassRegistryTest is Test {
 
     function test_register_revert_invalidProof() public {
         verifier.setShouldVerify(false);
-        verifier.setExpectedBoundData(alice, block.chainid);
-
-        ProofVerificationParams memory params = _createMockProofParams();
+        ProofVerificationParams memory params = _createMockProofParams(alice, block.chainid);
 
         vm.prank(alice);
         vm.expectRevert("Invalid Passport Proof");
@@ -205,11 +189,9 @@ contract UniPassRegistryTest is Test {
     }
 
     function test_register_revert_wrongSender() public {
-        // Set expected sender to bob, but alice calls
-        verifier.setExpectedBoundData(bob, block.chainid);
         verifier.setReturnedIdentifier(keccak256("passport1"));
-
-        ProofVerificationParams memory params = _createMockProofParams();
+        // Create params bound to bob, but alice calls
+        ProofVerificationParams memory params = _createMockProofParams(bob, block.chainid);
 
         vm.prank(alice);
         vm.expectRevert("Proof bound to different address");
@@ -217,10 +199,9 @@ contract UniPassRegistryTest is Test {
     }
 
     function test_register_revert_wrongChainId() public {
-        verifier.setExpectedBoundData(alice, 999); // Wrong chain ID
         verifier.setReturnedIdentifier(keccak256("passport1"));
-
-        ProofVerificationParams memory params = _createMockProofParams();
+        // Create params with wrong chain ID
+        ProofVerificationParams memory params = _createMockProofParams(alice, 999);
 
         vm.prank(alice);
         vm.expectRevert("Proof bound to different chain");
@@ -228,22 +209,19 @@ contract UniPassRegistryTest is Test {
     }
 
     function test_register_revert_duplicatePassport() public {
-        // First registration
-        verifier.setExpectedBoundData(alice, block.chainid);
         bytes32 passportId = keccak256("passport1");
         verifier.setReturnedIdentifier(passportId);
 
-        ProofVerificationParams memory params = _createMockProofParams();
-
+        // First registration
+        ProofVerificationParams memory params1 = _createMockProofParams(alice, block.chainid);
         vm.prank(alice);
-        registry.register(ALICE_COMMITMENT, params, false);
+        registry.register(ALICE_COMMITMENT, params1, false);
 
-        // Try to register again with same passport
-        verifier.setExpectedBoundData(bob, block.chainid);
-
+        // Try to register again with same passport (same passportId)
+        ProofVerificationParams memory params2 = _createMockProofParams(bob, block.chainid);
         vm.prank(bob);
         vm.expectRevert("Passport already registered");
-        registry.register(BOB_COMMITMENT, params, false);
+        registry.register(BOB_COMMITMENT, params2, false);
     }
 
     // =========================================================================
@@ -251,16 +229,11 @@ contract UniPassRegistryTest is Test {
     // =========================================================================
 
     function test_verifyAndConsume_success() public {
-        // Setup: First register a user
         _registerUser(alice, ALICE_COMMITMENT, keccak256("passport1"));
 
-        // Create semaphore proof
         ISemaphore.SemaphoreProof memory proof = _createMockSemaphoreProof(12345, 1);
-
-        // Verify
         registry.verifyAndConsume(proof);
 
-        // Check nullifier is consumed
         assertTrue(registry.nullifiers(proof.nullifier));
     }
 
@@ -292,8 +265,8 @@ contract UniPassRegistryTest is Test {
         _registerUser(alice, ALICE_COMMITMENT, keccak256("passport1"));
 
         // Same user can verify in different scopes
-        ISemaphore.SemaphoreProof memory proof1 = _createMockSemaphoreProof(11111, 1); // Scope 1
-        ISemaphore.SemaphoreProof memory proof2 = _createMockSemaphoreProof(22222, 2); // Scope 2
+        ISemaphore.SemaphoreProof memory proof1 = _createMockSemaphoreProof(11111, 1);
+        ISemaphore.SemaphoreProof memory proof2 = _createMockSemaphoreProof(22222, 2);
 
         registry.verifyAndConsume(proof1);
         registry.verifyAndConsume(proof2);
@@ -314,14 +287,17 @@ contract UniPassRegistryTest is Test {
     // Helper Functions
     // =========================================================================
 
-    function _createMockProofParams() internal pure returns (ProofVerificationParams memory) {
+    function _createMockProofParams(address sender, uint256 chainId) internal pure returns (ProofVerificationParams memory) {
         bytes32[] memory publicInputs = new bytes32[](1);
         publicInputs[0] = bytes32(0);
+
+        // Encode sender and chainId into committedInputs for the mock helper to decode
+        bytes memory committedInputs = abi.encode(sender, chainId);
 
         return ProofVerificationParams({
             version: bytes32("v1"),
             proofVerificationData: ProofVerificationData({vkeyHash: bytes32(0), proof: "", publicInputs: publicInputs}),
-            committedInputs: abi.encode("mock_committed_inputs"),
+            committedInputs: committedInputs,
             serviceConfig: ServiceConfig({
                 validityPeriodInSeconds: 3600,
                 domain: "unipass.id",
@@ -347,13 +323,10 @@ contract UniPassRegistryTest is Test {
     }
 
     function _registerUser(address user, uint256 commitment, bytes32 passportId) internal {
-        verifier.setExpectedBoundData(user, block.chainid);
         verifier.setReturnedIdentifier(passportId);
-
-        ProofVerificationParams memory params = _createMockProofParams();
+        ProofVerificationParams memory params = _createMockProofParams(user, block.chainid);
 
         vm.prank(user);
         registry.register(commitment, params, false);
     }
 }
-

@@ -11,9 +11,9 @@ all: clean install build test
 
 # Install dependencies
 install:
-	forge install foundry-rs/forge-std --no-commit
-	forge install semaphore-protocol/semaphore --no-commit
-	forge install OpenZeppelin/openzeppelin-contracts --no-commit
+	forge install foundry-rs/forge-std
+	forge install semaphore-protocol/semaphore
+	forge install OpenZeppelin/openzeppelin-contracts
 
 # Build contracts
 build:
@@ -109,4 +109,6 @@ help:
 	@echo "  make abi          - Export contract ABI"
 	@echo "  make coverage     - Run test coverage"
 	@echo "  make slither      - Run Slither static analysis"
+
+
 
