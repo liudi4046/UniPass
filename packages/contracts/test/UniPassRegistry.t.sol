@@ -24,6 +24,8 @@ contract MockSemaphore is ISemaphore {
     mapping(uint256 => mapping(uint256 => bool)) public members;
     mapping(uint256 => uint256) public merkleRoots;
     mapping(uint256 => uint256[]) public memberList;
+    // Track nullifiers per group (like real Semaphore)
+    mapping(uint256 => mapping(uint256 => bool)) public nullifiers;
 
     function createGroup(address admin) external override returns (uint256) {
         uint256 groupId = _nextGroupId++;
@@ -43,8 +45,10 @@ contract MockSemaphore is ISemaphore {
         return merkleRoots[groupId] != 0 && proof.merkleTreeRoot != 0;
     }
 
-    function validateProof(uint256 groupId, SemaphoreProof calldata proof) external view override {
+    function validateProof(uint256 groupId, SemaphoreProof calldata proof) external override {
         require(this.verifyProof(groupId, proof), "Invalid proof");
+        require(!nullifiers[groupId][proof.nullifier], "Nullifier already used");
+        nullifiers[groupId][proof.nullifier] = true;
     }
 
     // Helper for tests
@@ -54,6 +58,10 @@ contract MockSemaphore is ISemaphore {
 
     function getMerkleRoot(uint256 groupId) external view returns (uint256) {
         return merkleRoots[groupId];
+    }
+
+    function isNullifierUsed(uint256 groupId, uint256 nullifier) external view returns (bool) {
+        return nullifiers[groupId][nullifier];
     }
 }
 
@@ -234,7 +242,8 @@ contract UniPassRegistryTest is Test {
         ISemaphore.SemaphoreProof memory proof = _createMockSemaphoreProof(12345, 1);
         registry.verifyAndConsume(proof);
 
-        assertTrue(registry.nullifiers(proof.nullifier));
+        // Nullifier is now tracked by Semaphore, not UniPassRegistry
+        assertTrue(semaphore.isNullifierUsed(registry.uniPassGroupId(), proof.nullifier));
     }
 
     function test_verifyAndConsume_emitsEvent() public {
@@ -264,15 +273,17 @@ contract UniPassRegistryTest is Test {
     function test_verifyAndConsume_differentScopes() public {
         _registerUser(alice, ALICE_COMMITMENT, keccak256("passport1"));
 
-        // Same user can verify in different scopes
+        // Same user can verify in different scopes (different nullifiers)
         ISemaphore.SemaphoreProof memory proof1 = _createMockSemaphoreProof(11111, 1);
         ISemaphore.SemaphoreProof memory proof2 = _createMockSemaphoreProof(22222, 2);
 
         registry.verifyAndConsume(proof1);
         registry.verifyAndConsume(proof2);
 
-        assertTrue(registry.nullifiers(proof1.nullifier));
-        assertTrue(registry.nullifiers(proof2.nullifier));
+        // Nullifiers are tracked by Semaphore
+        uint256 groupId = registry.uniPassGroupId();
+        assertTrue(semaphore.isNullifierUsed(groupId, proof1.nullifier));
+        assertTrue(semaphore.isNullifierUsed(groupId, proof2.nullifier));
     }
 
     // =========================================================================
